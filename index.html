@@ -732,9 +732,14 @@ async function joinLesson() {
     .on('participant-left', () => { countParticipants(); setStatus(); })
     .on('app-message', onAppMessage)
     .on('left-meeting', leave)
-    .on('error', ev => { console.warn(ev); toast('Звонок прервался. Попробуй войти ещё раз.'); leave(); });
+    .on('error', ev => { console.warn(ev); if (!inCall) return; toast('Звонок прервался: ' + errText(ev)); leave(); });
   try { await call.join({ url: ROOM_URL, userName }); }
-  catch (err) { console.warn(err); toast('Не получилось войти. Проверь ссылку на комнату.'); leave(); }
+  catch (err) { console.warn(err); toast('Не получилось войти: ' + errText(err), true); setTimeout(() => $('#toast').classList.remove('show'), 12000); leave(); }
+}
+function errText(e) {
+  if (!e) return 'неизвестная ошибка';
+  const parts = [e.errorMsg, e.error && (e.error.type || e.error.msg), e.message].filter(Boolean);
+  return parts.length ? [...new Set(parts)].join(' / ') : String(e);
 }
 function leave() {
   inCall = false; outQ.length = 0;
