@@ -659,6 +659,7 @@ const ICE = { iceServers: [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ] };
 let peer = null, conn = null, media = null, localStream = null, camTrack = null, screenStream = null;
+let phase = '', openTimer = 0;
 let active = false, isHost = false, connected = false, retryTimer = 0, myName = '', otherName = '';
 
 const outQ = []; let pumping = false;
@@ -741,10 +742,13 @@ function setStatus(override) {
   let t;
   if (!active) t = 'Не в уроке';
   else if (connected) t = otherName ? `На связи: ${otherName}` : 'Собеседник на связи';
-  else if (!peer || (!isHost && !conn)) t = 'Подключаюсь…';
+  else if (phase === 'server') t = 'Подключаюсь к серверу…';
+  else if (phase === 'noserver') t = 'Сервер связи недоступен из этой сети';
+  else if (phase === 'linking') t = 'Сервер найден, соединяюсь с собеседником…';
+  else if (phase === 'nolink') t = 'Сеть не пускает прямое соединение';
   else t = 'В уроке, ждём второго участника';
   txt.textContent = t;
-  if (w) w.textContent = connected ? 'Видео подключается…' : t === 'Подключаюсь…' ? t : 'Ждём второго участника…';
+  if (w) w.textContent = connected ? 'Видео подключается…' : phase && phase !== 'host' ? t : 'Ждём второго участника…';
 }
 function showJoin(show) { $('#join').hidden = !show; $('#callUi').hidden = show; }
 
@@ -782,14 +786,16 @@ function start() {
   destroyPeer();
   isHost = false;
   const p = new Peer(HOST_ID, { config: ICE, debug: 1 });
-  peer = p; setStatus();
-  p.on('open', () => { if (peer !== p) return; isHost = true; setStatus(); });
+  peer = p; phase = 'server'; setStatus();
+  clearTimeout(openTimer);
+  openTimer = setTimeout(() => { if (peer === p && phase === 'server') { phase = 'noserver'; setStatus(); } }, 12000);
+  p.on('open', () => { if (peer !== p) return; clearTimeout(openTimer); isHost = true; phase = 'host'; setStatus(); });
   p.on('connection', c => attachConn(c));
   p.on('call', m => { attachMedia(m); m.answer(localStream); });
   p.on('disconnected', () => { if (peer === p && active && !p.destroyed) { try { p.reconnect(); } catch {} } });
   p.on('error', err => {
     if (peer !== p) return;
-    if (err.type === 'unavailable-id') startGuest();
+    if (err.type === 'unavailable-id') { clearTimeout(openTimer); startGuest(); }
     else { console.warn(err); setStatus('Нет связи с сервером, переподключаюсь…'); retry(4000); }
   });
 }
@@ -797,9 +803,13 @@ function startGuest() {
   destroyPeer();
   isHost = false;
   const p = new Peer({ config: ICE, debug: 1 });
-  peer = p; setStatus();
+  peer = p; phase = 'server'; setStatus();
+  clearTimeout(openTimer);
+  openTimer = setTimeout(() => { if (peer === p && phase === 'server') { phase = 'noserver'; setStatus(); } }, 12000);
   p.on('open', () => {
     if (peer !== p) return;
+    clearTimeout(openTimer); phase = 'linking'; setStatus();
+    openTimer = setTimeout(() => { if (peer === p && !connected) { phase = 'nolink'; setStatus(); } }, 15000);
     attachConn(p.connect(HOST_ID, { reliable: true, serialization: 'json' }));
     attachMedia(p.call(HOST_ID, localStream));
   });
@@ -812,7 +822,7 @@ function attachConn(c) {
   conn = c;
   c.on('open', () => {
     if (conn !== c) return;
-    connected = true; setStatus();
+    connected = true; clearTimeout(openTimer); phase = ''; setStatus();
     send({ t: 'hello', name: myName });
     send({ t: 'state', pages });
     if (isHost) send({ t: 'page', id: pages[cur].id });
